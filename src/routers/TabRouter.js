@@ -82,10 +82,18 @@ export default (
             routeName,
           };
         });
-        state = {
-          routes,
-          index: initialRouteIndex,
-        };
+        if (shouldBackNavigateToLastActiveTab) {
+          state = {
+            routes,
+            index: initialRouteIndex,
+            backstack: [],
+          };
+        } else {
+          state = {
+            routes,
+            index: initialRouteIndex,
+          };
+        }
         // console.log(`${order.join('-')}: Initial state`, {state});
       }
 
@@ -130,19 +138,23 @@ export default (
       // Handle tab changing. Do this after letting the current tab try to
       // handle the action, to allow inner tabs to change first
       let activeTabIndex = state.index;
-      const isBackEligible =
-        action.key == null || action.key === activeTabLastState.key;
-      if (
-        action.type === NavigationActions.BACK &&
-        isBackEligible
-      ) {
+      const isBackEligible = action.key == null ||
+        action.key === activeTabLastState.key;
+      if (action.type === NavigationActions.BACK && isBackEligible) {
         if (shouldBackNavigateToInitialRoute) {
           activeTabIndex = initialRouteIndex;
-        } else if (shouldBackNavigateToLastActiveTab && backstack.length >= 1) {
-          const previousIndex = backstack.pop();
+        } else if (
+          shouldBackNavigateToLastActiveTab &&
+          state.backstack !== undefined &&
+          state.backstack.length >= 1
+        ) {
+          const previousIndex = state.backstack[state.backstack.length - 1];
           return {
             ...state,
             index: previousIndex,
+            backstack: [
+              ...state.backstack.slice(0, state.backstack.length - 1),
+            ],
           };
         }
       }
@@ -209,16 +221,28 @@ export default (
         }
       }
       if (activeTabIndex !== state.index) {
-        const oldBackstackIndex = backstack.findIndex(
-          (index: number) => activeTabIndex === index);
-        if (oldBackstackIndex > -1) {
-          backstack.splice(oldBackstackIndex, 1);
-        }
-        backstack.push(state.index);
-        return {
+        const newState = {
           ...state,
           index: activeTabIndex,
         };
+        if (
+          shouldBackNavigateToLastActiveTab && state.backstack !== undefined
+        ) {
+          const oldBackstackIndex = state.backstack.findIndex(
+            (index: number) => activeTabIndex === index,
+          );
+          let oldBackstack: Array<number> = state.backstack !== undefined
+            ? state.backstack
+            : [];
+          if (oldBackstackIndex > -1 && oldBackstack.length > 0) {
+            oldBackstack = [
+              ...oldBackstack.slice(0, oldBackstackIndex),
+              ...oldBackstack.slice(oldBackstackIndex + 1),
+            ];
+          }
+          newState.backstack = [...oldBackstack, state.index];
+        }
+        return newState;
       } else if (didNavigate && !inputState) {
         return state;
       } else if (didNavigate) {
@@ -309,46 +333,43 @@ export default (
      * This will return null if there is no action matched
      */
     getActionForPathAndParams(path: string, params: ?NavigationParams) {
-      return (
-        order
-          .map((tabId: string) => {
-            const parts = path.split('/');
-            const pathToTest = paths[tabId];
-            if (parts[0] === pathToTest) {
-              const tabRouter = tabRouters[tabId];
-              const action: NavigationNavigateAction = NavigationActions.navigate(
-                {
-                  routeName: tabId,
-                }
+      return order
+        .map((tabId: string) => {
+          const parts = path.split('/');
+          const pathToTest = paths[tabId];
+          if (parts[0] === pathToTest) {
+            const tabRouter = tabRouters[tabId];
+            const action: NavigationNavigateAction = NavigationActions.navigate(
+              {
+                routeName: tabId,
+              },
+            );
+            if (tabRouter && tabRouter.getActionForPathAndParams) {
+              action.action = tabRouter.getActionForPathAndParams(
+                parts.slice(1).join('/'),
+                params,
               );
-              if (tabRouter && tabRouter.getActionForPathAndParams) {
-                action.action = tabRouter.getActionForPathAndParams(
-                  parts.slice(1).join('/'),
-                  params
-                );
-              } else if (params) {
-                action.params = params;
-              }
-              return action;
+            } else if (params) {
+              action.params = params;
             }
-            return null;
-          })
-          .find((action: *) => !!action) ||
+            return action;
+          }
+          return null;
+        })
+        .find((action: *) => !!action) ||
         order
           .map((tabId: string) => {
             const tabRouter = tabRouters[tabId];
-            return (
-              tabRouter && tabRouter.getActionForPathAndParams(path, params)
-            );
+            return tabRouter &&
+              tabRouter.getActionForPathAndParams(path, params);
           })
           .find((action: *) => !!action) ||
-        null
-      );
+        null;
     },
 
     getScreenOptions: createConfigGetter(
       routeConfigs,
-      config.navigationOptions
+      config.navigationOptions,
     ),
 
     getScreenConfig: getScreenConfigDeprecated,
